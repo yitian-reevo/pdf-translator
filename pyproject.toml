@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "pdf-translator"
+version = "0.1.0"
+description = ""
+authors = ["huangyitian <wfgydbu@163.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+openai = "^1.55.3"
+python-dotenv = "^1.0.1"
+pypdf2 = "^3.0.1"
+mypy = "^1.13.0"
+
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.13.0"
+ruff = "^0.8.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
