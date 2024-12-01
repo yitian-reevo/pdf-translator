@@ -1,11 +1,9 @@
-from settings import settings
 import sys
 import openai
-import argparse
 from pathlib import Path
 import PyPDF2
-from typing import Any
 from dataclasses import dataclass
+from pdf_translator.args_parser import ArgsParser, ParsedArgs
 
 
 @dataclass
@@ -33,12 +31,16 @@ def read_pdf(file_path: str | Path) -> str | None:
         return None
 
 
-def translate_text(text: str, chunk_size: int | None = None) -> str | None:
+def translate_text(text: str, settings: ParsedArgs) -> str | None:
     """Translate text to Chinese using GPT API."""
+
+    def _preprocess_chunk(chunk: str) -> str:
+        return chunk.replace("\n", "")
+
     if not text:
         return None
 
-    if not settings.is_configured:
+    if not settings.api_key:
         print("Error: OpenAI API key not configured!")
         print("Please set it via:")
         print("1. Environment variable OPENAI_API_KEY")
@@ -46,22 +48,12 @@ def translate_text(text: str, chunk_size: int | None = None) -> str | None:
         print("3. Command line argument --api-key")
         return None
 
-    openai.api_key = settings.api_key
-    chunk_size = chunk_size or settings.chunk_size
-    chunks: list[str] = [
-        text[i : i + chunk_size] for i in range(0, len(text), chunk_size)
-    ]
+    # Initialize the client
+    client = openai.OpenAI(api_key=settings.api_key)
 
-    # Initialize conversation with system message
-    messages: list[dict[str, str]] = [
-        {
-            "role": "system",
-            "content": """You are a professional translator.
-        I will provide you with multiple parts of a PDF document.
-        Please translate each part to Chinese while maintaining the original structure and formatting.
-        Make sure to preserve any technical terms or proper nouns appropriately.
-        I will send you the content part by part, and you should translate each part.""",
-        },
+    chunks: list[str] = [
+        text[i : i + settings.chunk_size]
+        for i in range(0, len(text), settings.chunk_size)
     ]
 
     translations: list[str] = []
@@ -69,29 +61,27 @@ def translate_text(text: str, chunk_size: int | None = None) -> str | None:
     try:
         # Send chunks one by one and collect translations
         for i, chunk in enumerate(chunks, 1):
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"Here's part {i} of the PDF content to translate:\n\n{chunk}",
-                },
-            )
-
-            response: Any = openai.ChatCompletion.create(
+            chunk = _preprocess_chunk(chunk)
+            print(f"Sending chunk {i}/{len(chunks)} to OpenAI...", repr(chunk))
+            response = client.chat.completions.create(
                 model=settings.model,
-                messages=messages,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a professional translator.
+                    Please translate the following text to English while maintaining the original structure and formatting.
+                    Make sure to preserve any technical terms or proper nouns appropriately.""",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Here's part {i} of the content to translate:\n\n{chunk}",
+                    },
+                ],
             )
 
             translation: str = response.choices[0].message.content
+            print(f"Received translation from OpenAI: {translation}")
             translations.append(translation)
-
-            # Add assistant's response to maintain conversation context
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": translation,
-                },
-            )
-
             print(f"Translated chunk {i}/{len(chunks)}")
 
         return "\n".join(translations)
@@ -112,39 +102,18 @@ def save_translation(translated_text: str, output_path: str | Path) -> bool:
 
 
 def main() -> None:
-    # Check if API key is configured
-    if not settings.is_configured:
-        print("Error: OpenAI API key not configured!")
-        sys.exit(1)
+    # Get settings from environment and CLI
+    parser = ArgsParser(env_prefix="PDFT_")
+    parsed_args = parser.parse_args()
 
-    # Parse command line arguments
-    parser: argparse.ArgumentParser = argparse.ArgumentParser(
-        description="Translate PDF to Chinese",
-    )
-    parser.add_argument("pdf_path", help="Path to the PDF file")
-    parser.add_argument(
-        "--output",
-        "-o",
-        help="Output file path (default: input_translated.txt)",
-    )
-    args: argparse.Namespace = parser.parse_args()
-
-    # Validate PDF path
-    pdf_path: Path = Path(args.pdf_path)
-    if not pdf_path.exists():
-        print(f"Error: PDF file not found: {pdf_path}")
-        sys.exit(1)
-
-    # Set output path
-    output_path: Path = (
-        Path(args.output)
-        if args.output
-        else pdf_path.with_stem(f"{pdf_path.stem}_translated").with_suffix(".txt")
+    # Set default output path if not specified
+    output_path = (
+        parsed_args.output or f"translated_{parsed_args.pdf_path.rstrip('.pdf')}.txt"
     )
 
     # Read PDF content
-    print(f"Reading PDF: {pdf_path}")
-    pdf_content: str | None = read_pdf(pdf_path)
+    print(f"Reading PDF: {parsed_args.pdf_path}")
+    pdf_content: str | None = read_pdf(parsed_args.pdf_path)
 
     if not pdf_content:
         print("Failed to read PDF content!")
@@ -152,9 +121,9 @@ def main() -> None:
 
     # Translate content
     print("\nStarting translation...")
-    print(f"Using model: {settings.model}")
-    print(f"Chunk size: {settings.chunk_size} characters")
-    translated_content: str | None = translate_text(pdf_content)
+    print(f"Using model: {parsed_args.model}")
+    print(f"Chunk size: {parsed_args.chunk_size} characters")
+    translated_content: str | None = translate_text(pdf_content, parsed_args)
 
     if not translated_content:
         print("Translation failed!")
